@@ -1,292 +1,117 @@
-
-import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.express as px
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_absolute_error, r2_score
-from datetime import datetime
-
-st.set_page_config(
-    page_title="EV Intelligence Pro",
-    page_icon="🔋",
-    layout="wide"
-)
-
-FEATURES = [
-    "battery_capacity_kwh",
-    "charge_percent",
-    "extra_load_kg",
-    "speed_kmph",
-    "ac_on"
-]
-TARGET = "range_km"
-
-# ---------- DESIGN ----------
-st.markdown("""
-<style>
-.stApp {
-    background: linear-gradient(135deg, #07111f, #101d32);
-    color: #f1f5f9;
-}
-[data-testid="stSidebar"] {
-    background: #0b1423;
-}
-[data-testid="stMetric"] {
-    background: #15243a;
-    padding: 18px;
-    border: 1px solid #29415e;
-    border-radius: 14px;
-}
-h1, h2, h3 {
-    color: #65e6c2;
-}
-.stButton button {
-    border-radius: 9px;
-    font-weight: bold;
-}
-</style>
-""", unsafe_allow_html=True)
-
-# ---------- DATA ----------
-@st.cache_data
-def make_demo_data():
-    np.random.seed(42)
-    n = 500
-    battery = np.random.uniform(30, 100, n)
-    charge = np.random.uniform(20, 100, n)
-    load = np.random.uniform(0, 500, n)
-    speed = np.random.uniform(20, 100, n)
-    ac = np.random.randint(0, 2, n)
-
-    # Synthetic values for demonstration only
-    distance = (
-        battery * 2 * charge / 100
-        - load * 0.025
-        - speed * 0.15
-        - ac * 5
-        + np.random.normal(0, 3, n)
-    )
-
-    return pd.DataFrame({
-        "battery_capacity_kwh": battery,
-        "charge_percent": charge,
-        "extra_load_kg": load,
-        "speed_kmph": speed,
-        "ac_on": ac,
-        "range_km": np.maximum(distance, 0)
-    })
-
-if "history" not in st.session_state:
-    st.session_state.history = []
-
-# ---------- SIDEBAR ----------
-st.sidebar.title("🔋 EV INTELLIGENCE")
-st.sidebar.caption("EV Analytics Platform")
-
-page = st.sidebar.radio(
-    "Navigation",
-    [
-        "Overview",
-        "Range Prediction",
-        "Analytics",
-        "Prediction History",
-        "Dataset"
-    ]
-)
-
-uploaded = st.sidebar.file_uploader(
-    "Upload EV CSV",
-    type=["csv"]
-)
-
-if uploaded:
-    try:
-        raw_df = pd.read_csv(uploaded)
-        st.sidebar.success("CSV uploaded")
-    except Exception:
-        st.sidebar.error("Unable to read this CSV.")
-        st.stop()
-else:
-    raw_df = make_demo_data()
-    st.sidebar.info("Demo dataset active")
-
-missing = [c for c in FEATURES + [TARGET] if c not in raw_df.columns]
-if missing:
-    st.error("Required columns missing: " + ", ".join(missing))
-    st.code(", ".join(FEATURES + [TARGET]))
-    st.stop()
-
-df = raw_df.copy()
-for col in FEATURES + [TARGET]:
-    df[col] = pd.to_numeric(df[col], errors="coerce")
-
-df = df.replace([np.inf, -np.inf], np.nan)
-df = df.dropna(subset=FEATURES + [TARGET])
-
-if len(df) < 10 or df[TARGET].nunique() < 2:
-    st.error("Provide at least 10 valid rows with different range values.")
-    st.stop()
-
-# ---------- MACHINE LEARNING ----------
-X = df[FEATURES]
-y = df[TARGET]
-
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42
-)
-
-model = RandomForestRegressor(
-    n_estimators=100,
-    random_state=42
-)
-model.fit(X_train, y_train)
-
-test_pred = model.predict(X_test)
-mae = mean_absolute_error(y_test, test_pred)
-r2 = r2_score(y_test, test_pred)
-
-# ---------- HEADER ----------
-st.title("EV Intelligence Pro")
-st.caption(
-    "Electric Vehicle Range Prediction | Machine Learning | Energy Analytics"
-)
-
-if page == "Overview":
-    st.subheader("Platform Overview")
-
-    a, b, c, d = st.columns(4)
-    a.metric("Valid Records", f"{len(df):,}")
-    b.metric("Average Range", f"{df[TARGET].mean():.1f} km")
-    c.metric("Model MAE", f"{mae:.1f} km")
-    d.metric("Model R²", f"{r2:.3f}")
-
-    st.markdown("### EV Range Distribution")
-    fig = px.histogram(
-        df, x=TARGET, nbins=25,
-        title="Range Distribution",
-        labels={TARGET: "Range (km)"},
-        template="plotly_dark"
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-    st.markdown("### System Status")
-    st.write("**Prediction engine:** Ready")
-    st.write("**Dataset:** Demo data" if uploaded is None
-             else "**Dataset:** Uploaded CSV")
-    st.write("**Live vehicle connection:** Not configured")
-
-elif page == "Range Prediction":
-    st.subheader("Machine Learning Range Prediction")
-
-    left, right = st.columns(2)
-
-    with left:
-        battery = st.slider(
-            "Battery capacity (kWh)", 10.0, 150.0, 60.0
-        )
-        charge = st.slider("Battery charge (%)", 0, 100, 80)
-        load = st.slider("Additional load (kg)", 0, 1000, 100)
-
-    with right:
-        speed = st.slider("Average speed (km/h)", 10, 150, 60)
-        ac = st.selectbox("Air conditioning", ["Off", "On"])
-        st.info("Prediction uses the currently loaded dataset.")
-
-    if st.button("⚡ Predict EV Range", type="primary"):
-        input_df = pd.DataFrame([{
-            "battery_capacity_kwh": battery,
-            "charge_percent": charge,
             "extra_load_kg": load,
             "speed_kmph": speed,
             "ac_on": 1 if ac == "On" else 0
         }])
-
-        prediction = max(0, float(model.predict(input_df)[0]))
-
-        st.success(f"Estimated driving range: {prediction:.2f} km")
-
-        st.session_state.history.append({
+        prediction = max(0.0, float(model.predict(input_data)[0]))
+        st.session_state["last_prediction"] = {
             "Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "Vehicle ID": vehicle_id.strip() or "EV-001",
             "Battery (kWh)": battery,
             "Charge (%)": charge,
             "Load (kg)": load,
             "Speed (km/h)": speed,
             "AC": ac,
             "Predicted Range (km)": round(prediction, 2)
-        })
-
-        st.caption(
-            "Estimate only. Real range depends on the vehicle, road, "
-            "weather, battery condition, and training data."
+        }
+        if "prediction_history" not in st.session_state:
+            st.session_state["prediction_history"] = []
+        st.session_state["prediction_history"].insert(
+            0, st.session_state["last_prediction"]
         )
 
-elif page == "Analytics":
-    st.subheader("EV Performance Analytics")
+    if "last_prediction" in st.session_state:
+        last = st.session_state["last_prediction"]
+        st.markdown("#### Latest prediction")
+        st.metric(
+            f"Estimated range · {last['Vehicle ID']}",
+            f"{last['Predicted Range (km)']:.2f} km"
+        )
+        st.progress(int(last["Charge (%)"]))
+        st.caption(f"Battery charge input: {last['Charge (%)']}%")
 
-    fig1 = px.scatter(
-        df, x="extra_load_kg", y=TARGET,
-        color="speed_kmph",
-        title="Additional Load vs Range",
-        labels={
-            "extra_load_kg": "Additional Load (kg)",
-            TARGET: "Range (km)",
-            "speed_kmph": "Speed (km/h)"
-        },
+with right:
+    st.markdown("### 📊 Energy analytics")
+    chart_tab1, chart_tab2 = st.tabs(["Load vs range", "Speed vs range"])
+    with chart_tab1:
+        fig_load = px.scatter(
+            df, x="extra_load_kg", y="range_km", color="charge_percent",
+            labels={
+                "extra_load_kg": "Additional load (kg)",
+                "range_km": "Recorded range (km)",
+                "charge_percent": "Charge (%)"
+            },
+            template="plotly_dark", opacity=0.8
+        )
+        fig_load.update_layout(
+            height=350, margin=dict(l=10, r=10, t=20, b=10),
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)"
+        )
+        st.plotly_chart(fig_load, use_container_width=True)
+    with chart_tab2:
+        fig_speed = px.scatter(
+            df, x="speed_kmph", y="range_km", color="extra_load_kg",
+            labels={
+                "speed_kmph": "Speed (km/h)",
+                "range_km": "Recorded range (km)",
+                "extra_load_kg": "Load (kg)"
+            },
+            template="plotly_dark", opacity=0.8
+        )
+        fig_speed.update_layout(
+            height=350, margin=dict(l=10, r=10, t=20, b=10),
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)"
+        )
+        st.plotly_chart(fig_speed, use_container_width=True)
+
+    importance_df = pd.DataFrame({
+        "Feature": FEATURES,
+        "Importance": model.feature_importances_
+    }).sort_values("Importance", ascending=True)
+    fig_importance = px.bar(
+        importance_df, x="Importance", y="Feature", orientation="h",
+        title="What influences the model prediction?",
         template="plotly_dark"
     )
-    st.plotly_chart(fig1, use_container_width=True)
-
-    fig2 = px.bar(
-        x=FEATURES,
-        y=model.feature_importances_,
-        labels={"x": "Input Feature", "y": "Importance"},
-        title="Model Feature Importance",
-        template="plotly_dark"
+    fig_importance.update_layout(
+        height=280, margin=dict(l=10, r=10, t=45, b=10),
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)"
     )
-    st.plotly_chart(fig2, use_container_width=True)
+    st.plotly_chart(fig_importance, use_container_width=True)
 
-    st.metric("Mean Absolute Error", f"{mae:.2f} km")
-    st.metric("R² Score", f"{r2:.3f}")
+# -------------------- HISTORY AND DATA --------------------
+st.divider()
+bottom_left, bottom_right = st.columns([1.2, 1], gap="large")
 
-elif page == "Prediction History":
-    st.subheader("Prediction History")
-
-    if st.session_state.history:
-        history_df = pd.DataFrame(st.session_state.history)
-        st.dataframe(history_df, use_container_width=True)
-
+with bottom_left:
+    st.markdown("### 🕘 Recent prediction history")
+    history = st.session_state.get("prediction_history", [])
+    if history:
+        history_df = pd.DataFrame(history)
+        st.dataframe(history_df.head(10), use_container_width=True, hide_index=True)
         st.download_button(
-            "Download Prediction History",
-            history_df.to_csv(index=False).encode("utf-8"),
+            "Download prediction history CSV",
+            data=history_df.to_csv(index=False).encode("utf-8"),
             file_name="ev_prediction_history.csv",
             mime="text/csv"
         )
-
-        if st.button("Clear History"):
-            st.session_state.history = []
-            st.rerun()
     else:
-        st.info("No predictions saved in this session yet.")
+        st.info("Your predictions will appear here after you click Predict range.")
+        st.caption("History is kept for this browser session only.")
 
-elif page == "Dataset":
-    st.subheader("Dataset Explorer")
-    st.write(f"**Rows:** {len(df)} | **Columns:** {len(df.columns)}")
-    st.dataframe(df, use_container_width=True)
-
-    st.markdown("### Summary Statistics")
-    st.dataframe(df.describe(), use_container_width=True)
-
+with bottom_right:
+    st.markdown("### 🗂️ Dataset preview")
+    st.dataframe(df.head(8), use_container_width=True, hide_index=True)
     st.download_button(
-        "Download Cleaned Dataset",
-        df.to_csv(index=False).encode("utf-8"),
-        file_name="ev_dataset.csv",
+        "Download active dataset CSV",
+        data=df.to_csv(index=False).encode("utf-8"),
+        file_name="ev_active_dataset.csv",
         mime="text/csv"
     )
 
 st.divider()
-st.caption(
-    "EV Intelligence Pro | Educational prototype | "
-    "Demo data is synthetic, not validated vehicle performance data."
+st.markdown(
+    "<div class='small-note'>EV Intelligence Pro · Single-page analytics workspace · "
+    "Educational prototype. Synthetic demo data is not real-world vehicle evidence. "
+    "Use verified measured data before relying on predictions.</div>",
+    unsafe_allow_html=True
 )

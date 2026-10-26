@@ -3,9 +3,10 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_absolute_error, r2_score
 from datetime import datetime
 
-st.set_page_config(page_title="EV Intelligence Pro — Fleet Dashboard", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="EV Intelligence Pro — Fleet & Research Dashboard", page_icon="⚡", layout="wide")
 
 # --- Initialize Session State for Fleet and History ---
 if "fleet" not in st.session_state:
@@ -50,8 +51,8 @@ def train_model():
 model = train_model()
 
 # --- Top Bar Header ---
-st.title("⚡ EV Intelligence Pro — Fleet Dashboard")
-st.markdown("Company-level multi-vehicle EV monitoring, AI range prediction, and session analytics.")
+st.title("⚡ EV Intelligence Pro — Fleet & Research Dashboard")
+st.markdown("Company-level multi-vehicle EV monitoring, AI range prediction, session history, and research dataset evaluation.")
 st.markdown("---")
 
 # --- Sidebar: Fleet Management & Controls ---
@@ -127,7 +128,6 @@ with left_col:
         if charge_pct < 20:
             st.warning("⚠️ Low battery warning! Consider scheduling a recharge soon.")
             
-        # Save to session history with explicit types
         new_history_row = pd.DataFrame([{
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "vehicle_id": str(selected_vehicle),
@@ -144,7 +144,6 @@ with right_col:
     st.subheader("📊 Fleet Overview & Analytics")
     
     if not st.session_state.history.empty:
-        # Create a clean copy with forced numeric formatting for plotting
         plot_df = st.session_state.history.copy()
         plot_df["speed_kmph"] = pd.to_numeric(plot_df["speed_kmph"])
         plot_df["predicted_range_km"] = pd.to_numeric(plot_df["predicted_range_km"])
@@ -171,8 +170,8 @@ with right_col:
 
 st.markdown("---")
 
-# --- Fleet Register & History Tables ---
-tab1, tab2 = st.tabs(["🚗 Registered Fleet", "📈 Prediction History"])
+# --- Tabs for Inventory, History, and Research Evaluation ---
+tab1, tab2, tab3 = st.tabs(["🚗 Registered Fleet", "📈 Prediction History", "🔬 Research Dataset & Evaluation"])
 
 with tab1:
     st.subheader("Current Fleet Inventory")
@@ -200,3 +199,95 @@ with tab2:
         )
     else:
         st.info("No predictions recorded in this session yet.")
+
+with tab3:
+    st.subheader("🔬 Research Benchmark Dataset & Batch Prediction")
+    st.markdown("Test the machine learning model against a structured research dataset or upload custom telemetry batch records for bulk range inference.")
+    
+    col_res1, col_res2 = st.columns([1, 1])
+    
+    with col_res1:
+        use_sample_data = st.checkbox("Load Built-in EV Research Test Dataset", value=True)
+        
+    with col_res2:
+        uploaded_research_file = st.file_uploader("Or Upload Custom Research CSV", type=["csv"])
+
+    # Load data source
+    research_df = None
+    if uploaded_research_file is not None:
+        try:
+            research_df = pd.read_csv(uploaded_research_file)
+            st.success("Custom research dataset loaded successfully!")
+        except Exception as e:
+            st.error(f"Error reading file: {e}")
+    elif use_sample_data:
+        # Generate a consistent mock research test benchmark set
+        np.random.seed(101)
+        n_test = 100
+        research_df = pd.DataFrame({
+            "test_sample_id": [f"RES-{i:03d}" for i in range(1, n_test + 1)],
+            "battery_capacity_kwh": np.random.uniform(60, 100, n_test),
+            "charge_percent": np.random.uniform(20, 100, n_test),
+            "extra_load_kg": np.random.uniform(0, 250, n_test),
+            "speed_kmph": np.random.uniform(45, 130, n_test),
+            "ac_on": np.random.choice([0, 1], n_test),
+            "actual_range_km": np.random.uniform(120, 480, n_test) # Ground truth for research validation
+        })
+
+    if research_df is not None:
+        st.markdown("#### Preview of Research Dataset")
+        st.dataframe(research_df.head(5), use_container_width=True)
+        
+        required_cols = ["battery_capacity_kwh", "charge_percent", "extra_load_kg", "speed_kmph", "ac_on"]
+        missing_cols = [col for col in required_cols if col not in research_df.columns]
+        
+        if missing_cols:
+            st.error(f"Research dataset is missing required feature columns: {missing_cols}")
+        else:
+            if st.button("🚀 Run Batch Research Prediction", type="primary"):
+                features_for_pred = research_df[required_cols].copy()
+                # Ensure correct types
+                for col in required_cols:
+                    features_for_pred[col] = pd.to_numeric(features_for_pred[col])
+                
+                # Predict
+                predictions = model.predict(features_for_pred)
+                research_df["predicted_range_km"] = np.round(predictions, 2)
+                
+                st.success("Batch prediction completed successfully across all research records!")
+                st.dataframe(research_df, use_container_width=True)
+                
+                # If ground truth column 'actual_range_km' exists, compute metrics
+                if "actual_range_km" in research_df.columns:
+                    st.markdown("### 📊 Research Model Evaluation Metrics")
+                    y_true = pd.to_numeric(research_df["actual_range_km"])
+                    y_pred = research_df["predicted_range_km"]
+                    
+                    mae = mean_absolute_error(y_true, y_pred)
+                    r2 = r2_score(y_true, y_pred)
+                    
+                    m1, m2 = st.columns(2)
+                    with m1:
+                        st.metric("Mean Absolute Error (MAE)", f"{mae:.2f} km")
+                    with m2:
+                        st.metric("R² Score (Accuracy Fit)", f"{r2:.4f}")
+                        
+                    # Scatter plot comparison (Actual vs Predicted)
+                    fig_eval = px.scatter(
+                        research_df,
+                        x="actual_range_km",
+                        y="predicted_range_km",
+                        trendline="ols",
+                        labels={"actual_range_km": "Actual Range (km)", "predicted_range_km": "Predicted Range (km)"},
+                        title="Model Validation: Actual vs. Predicted Range (Research Benchmark)"
+                    )
+                    st.plotly_chart(fig_eval, use_container_width=True)
+                
+                # Export results
+                research_csv = research_df.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "📥 Download Batch Prediction Results CSV",
+                    research_csv,
+                    file_name="ev_research_predictions_output.csv",
+                    mime="text/csv"
+                )

@@ -2,125 +2,180 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.express as px
-
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, r2_score
 
-st.set_page_config(page_title="EV Intelligence AI", page_icon="⚡", layout="wide")
+st.set_page_config(
+    page_title="EV Intelligence",
+    page_icon="🔋",
+    layout="wide"
+)
 
-st.title("⚡ EV Intelligence — AI Range Predictor")
-st.write("Machine-learning prediction using a generated demonstration dataset.")
+st.title("🔋 EV Intelligence")
+st.subheader("EV Load-Based Mileage Prediction")
+st.write("Upload your EV dataset or use the demo dataset.")
 
-# Generate demonstration training data
+# Create demo dataset
 @st.cache_data
-def create_dataset():
-    rng = np.random.default_rng(42)
+def create_demo_data():
+    np.random.seed(42)
     n = 500
 
-    battery = rng.uniform(20, 100, n)
-    charge = rng.uniform(10, 100, n)
-    load = rng.uniform(0, 500, n)
-    speed = rng.uniform(20, 120, n)
-    ac = rng.integers(0, 2, n)
+    battery = np.random.uniform(20, 100, n)
+    charge = np.random.uniform(20, 100, n)
+    load = np.random.uniform(0, 500, n)
+    speed = np.random.uniform(20, 100, n)
+    ac = np.random.randint(0, 2, n)
 
-    consumption = 160 + speed * 0.35 + load * 0.04 + ac * 15
-    energy = battery * charge / 100 * 0.90
-    target_range = energy * 1000 / consumption
-    target_range += rng.normal(0, 5, n)
+    range_km = (
+        battery * 2.0
+        * (charge / 100)
+        - load * 0.025
+        - speed * 0.15
+        - ac * 5
+        + np.random.normal(0, 3, n)
+    )
 
-    return pd.DataFrame({
-        "Battery": battery,
-        "Charge": charge,
-        "Load": load,
-        "Speed": speed,
-        "AC": ac,
-        "Range": target_range
+    data = pd.DataFrame({
+        "battery_capacity_kwh": battery,
+        "charge_percent": charge,
+        "extra_load_kg": load,
+        "speed_kmph": speed,
+        "ac_on": ac,
+        "range_km": np.maximum(range_km, 0)
     })
 
-data = create_dataset()
+    return data
 
-features = ["Battery", "Charge", "Load", "Speed", "AC"]
-X = data[features]
-y = data["Range"]
+uploaded_file = st.file_uploader(
+    "Upload CSV dataset",
+    type=["csv"]
+)
 
+if uploaded_file is not None:
+    try:
+        df = pd.read_csv(uploaded_file)
+        st.success("Dataset uploaded successfully!")
+    except Exception as e:
+        st.error(f"Could not read CSV: {e}")
+        st.stop()
+else:
+    df = create_demo_data()
+    st.info("Using demo data. Upload your own CSV to replace it.")
+
+# Required columns
+features = [
+    "battery_capacity_kwh",
+    "charge_percent",
+    "extra_load_kg",
+    "speed_kmph",
+    "ac_on"
+]
+target = "range_km"
+
+st.subheader("Dataset Preview")
+st.dataframe(df.head(10), use_container_width=True)
+
+missing = [c for c in features + [target] if c not in df.columns]
+
+if missing:
+    st.error("Missing required columns: " + ", ".join(missing))
+    st.write("Use these exact column names:")
+    st.code(", ".join(features + [target]))
+    st.stop()
+
+# Clean data
+for column in features + [target]:
+    df[column] = pd.to_numeric(df[column], errors="coerce")
+
+df = df.replace([np.inf, -np.inf], np.nan)
+df = df.dropna(subset=features + [target])
+
+if len(df) < 10:
+    st.error("Please provide at least 10 valid dataset rows.")
+    st.stop()
+
+if df[target].nunique() < 2:
+    st.error("The range_km column must contain different values.")
+    st.stop()
+
+X = df[features]
+y = df[target]
+
+# Train model
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, random_state=42
 )
 
-model = RandomForestRegressor(n_estimators=100, random_state=42)
+model = RandomForestRegressor(
+    n_estimators=100,
+    random_state=42
+)
 model.fit(X_train, y_train)
 
 predictions = model.predict(X_test)
+
 mae = mean_absolute_error(y_test, predictions)
-r2 = r2_score(y_test, predictions)
+r2 = r2_score(y_test, predictions) if len(y_test) > 1 else 0
 
 st.subheader("Model Performance")
-a, b = st.columns(2)
-a.metric("Mean Absolute Error", f"{mae:.2f} km")
-b.metric("R² Score", f"{r2:.3f}")
+
+col1, col2, col3 = st.columns(3)
+col1.metric("Valid Rows", len(df))
+col2.metric("Mean Absolute Error", f"{mae:.2f} km")
+col3.metric("R² Score", f"{r2:.3f}")
 
 st.caption(
-    "These metrics measure performance on synthetic demonstration data, "
-    "not on real-world EV measurements."
+    "These metrics use a held-out portion of the uploaded dataset. "
+    "Results depend on data quality and representativeness."
 )
 
-st.divider()
-st.sidebar.header("Vehicle Inputs")
+# Prediction controls
+st.subheader("Predict EV Range")
 
-battery = st.sidebar.slider("Battery Capacity (kWh)", 20, 100, 50)
-charge = st.sidebar.slider("Battery Charge (%)", 10, 100, 80)
-load = st.sidebar.slider("Extra Load (kg)", 0, 500, 100)
-speed = st.sidebar.slider("Speed (km/h)", 20, 120, 60)
-ac_on = st.sidebar.checkbox("Air Conditioning ON")
+c1, c2, c3 = st.columns(3)
 
-ac = 1 if ac_on else 0
+with c1:
+    battery = st.number_input(
+        "Battery capacity (kWh)", 1.0, 300.0, 60.0
+    )
+    charge = st.slider("Battery charge (%)", 0, 100, 80)
 
-vehicle = pd.DataFrame([{
-    "Battery": battery,
-    "Charge": charge,
-    "Load": load,
-    "Speed": speed,
-    "AC": ac
-}])
+with c2:
+    load = st.number_input(
+        "Extra load (kg)", 0.0, 5000.0, 100.0
+    )
+    speed = st.number_input(
+        "Average speed (km/h)", 1.0, 200.0, 60.0
+    )
 
-predicted_range = max(0, float(model.predict(vehicle)[0]))
+with c3:
+    ac = st.selectbox("Air conditioner", ["Off", "On"])
+    ac_value = 1 if ac == "On" else 0
 
-st.subheader("Your EV Prediction")
-st.metric("AI Estimated Range", f"{predicted_range:.1f} km")
+if st.button("Predict Range", type="primary"):
+    input_data = pd.DataFrame([{
+        "battery_capacity_kwh": battery,
+        "charge_percent": charge,
+        "extra_load_kg": load,
+        "speed_kmph": speed,
+        "ac_on": ac_value
+    }])
 
-st.subheader("Feature Importance")
-importance = pd.DataFrame({
-    "Feature": features,
-    "Importance": model.feature_importances_
-}).sort_values("Importance", ascending=False)
+    result = max(0, float(model.predict(input_data)[0]))
 
-fig = px.bar(
-    importance,
-    x="Importance",
-    y="Feature",
-    orientation="h",
-    title="Which Inputs Influence the Model?"
-)
-st.plotly_chart(fig, use_container_width=True)
+    st.success(f"Predicted EV range: {result:.2f} km")
+    st.caption(
+        "This is an ML estimate, not a guaranteed driving range. "
+        "Accuracy depends on the training dataset."
+    )
 
-st.subheader("Training Dataset")
-st.dataframe(data.head(20), use_container_width=True)
-
+# Download cleaned data
+st.subheader("Download Dataset")
 st.download_button(
-    "Download Training Dataset",
-    data.to_csv(index=False),
-    file_name="ev_training_dataset.csv",
-    mime="text/csv"
-)
-
-result = vehicle.copy()
-result["Predicted_Range_km"] = predicted_range
-
-st.download_button(
-    "Download Your Prediction",
-    result.to_csv(index=False),
-    file_name="ev_prediction.csv",
+    "Download Cleaned CSV",
+    data=df.to_csv(index=False).encode("utf-8"),
+    file_name="ev_dataset_cleaned.csv",
     mime="text/csv"
 )

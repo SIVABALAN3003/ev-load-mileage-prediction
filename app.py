@@ -31,7 +31,6 @@ def train_model():
     speed = np.random.uniform(40, 120, n_samples)
     ac = np.random.choice([0, 1], n_samples)
     
-    # Range formula baseline + noise
     range_km = (cap * (charge / 100) * 4.5) - (load * 0.08) - ((speed - 60).clip(0) * 0.5) - (ac * 15) + np.random.normal(0, 5, n_samples)
     range_km = np.clip(range_km, 10, 700)
     
@@ -58,7 +57,6 @@ st.markdown("---")
 # --- Sidebar: Fleet Management & Controls ---
 st.sidebar.header("🚗 Fleet Management")
 
-# Add new vehicle form
 with st.sidebar.expander("Register New Vehicle"):
     new_id = st.text_input("Vehicle ID", value=f"EV-00{len(st.session_state.fleet)+1}")
     new_model = st.text_input("Vehicle Model", value="Model Y Performance")
@@ -74,8 +72,6 @@ with st.sidebar.expander("Register New Vehicle"):
             st.sidebar.success(f"Added {new_id} successfully!")
 
 selected_vehicle = st.sidebar.selectbox("Select Active Vehicle for Prediction", st.session_state.fleet["vehicle_id"].values)
-
-# Get details of selected vehicle
 selected_row = st.session_state.fleet[st.session_state.fleet["vehicle_id"] == selected_vehicle].iloc[0]
 
 st.sidebar.markdown("---")
@@ -85,7 +81,7 @@ st.sidebar.info(f"**Selected Info:**\n- Model: {selected_row['model']}\n- Capaci
 col1, col2, col3, col4 = st.columns(4)
 total_vehicles = len(st.session_state.fleet)
 
-avg_range = st.session_state.history["predicted_range_km"].mean() if not st.session_state.history.empty else 350.0
+avg_range = st.session_state.history["predicted_range_km"].astype(float).mean() if not st.session_state.history.empty else 350.0
 active_count = len(st.session_state.fleet[st.session_state.fleet["status"] == "Active"])
 
 with col1:
@@ -117,11 +113,11 @@ with left_col:
     if submit_btn:
         ac_val = 1 if ac_status == "On" else 0
         input_data = pd.DataFrame({
-            "battery_capacity_kwh": [battery_cap],
-            "charge_percent": [charge_pct],
-            "extra_load_kg": [extra_load],
-            "speed_kmph": [speed],
-            "ac_on": [ac_val]
+            "battery_capacity_kwh": [float(battery_cap)],
+            "charge_percent": [float(charge_pct)],
+            "extra_load_kg": [float(extra_load)],
+            "speed_kmph": [float(speed)],
+            "ac_on": [int(ac_val)]
         })
         
         prediction = model.predict(input_data)[0]
@@ -131,16 +127,16 @@ with left_col:
         if charge_pct < 20:
             st.warning("⚠️ Low battery warning! Consider scheduling a recharge soon.")
             
-        # Save to session history
+        # Save to session history with explicit types
         new_history_row = pd.DataFrame([{
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "vehicle_id": selected_vehicle,
-            "battery_kwh": battery_cap,
-            "charge_percent": charge_pct,
-            "extra_load_kg": extra_load,
-            "speed_kmph": speed,
-            "ac_on": ac_status,
-            "predicted_range_km": round(prediction, 2)
+            "vehicle_id": str(selected_vehicle),
+            "battery_kwh": float(battery_cap),
+            "charge_percent": float(charge_pct),
+            "extra_load_kg": float(extra_load),
+            "speed_kmph": float(speed),
+            "ac_on": str(ac_status),
+            "predicted_range_km": float(round(prediction, 2))
         }])
         st.session_state.history = pd.concat([new_history_row, st.session_state.history], ignore_index=True)
 
@@ -148,13 +144,18 @@ with right_col:
     st.subheader("📊 Fleet Overview & Analytics")
     
     if not st.session_state.history.empty:
+        # Create a clean copy with forced numeric formatting for plotting
+        plot_df = st.session_state.history.copy()
+        plot_df["speed_kmph"] = pd.to_numeric(plot_df["speed_kmph"])
+        plot_df["predicted_range_km"] = pd.to_numeric(plot_df["predicted_range_km"])
+        plot_df["extra_load_kg"] = pd.to_numeric(plot_df["extra_load_kg"])
+        
         fig = px.scatter(
-            st.session_state.history, 
+            plot_df, 
             x="speed_kmph", 
             y="predicted_range_km", 
             color="vehicle_id",
-            size="extra_load_kg",
-            hover_data=["charge_percent", "ac_on"],
+            hover_data=["extra_load_kg", "charge_percent", "ac_on"],
             title="Speed vs Range Impact across Fleet"
         )
         st.plotly_chart(fig, use_container_width=True)

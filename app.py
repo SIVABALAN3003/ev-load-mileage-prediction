@@ -3,207 +3,199 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_absolute_error, r2_score
 from datetime import datetime
 
-st.set_page_config(page_title="EV Intelligence Pro", page_icon="🔋", layout="wide")
+st.set_page_config(page_title="EV Intelligence Pro — Fleet Dashboard", page_icon="⚡", layout="wide")
 
-st.markdown("""
-<style>
-.stApp {background: linear-gradient(145deg,#07111f,#101d32); color:#edf4fb;}
-.block-container {padding-top:1.2rem; max-width:1500px;}
-h1,h2,h3 {color:#69e6c2;}
-[data-testid="stMetric"] {background:#12243a;border:1px solid #263d57;padding:16px;border-radius:14px;}
-[data-testid="stMetricLabel"] {color:#a9bfd4;}
-[data-testid="stMetricValue"] {color:#f5fbff;}
-.stButton button,.stDownloadButton button {border-radius:9px;font-weight:650;}
-</style>
-""", unsafe_allow_html=True)
+# --- Initialize Session State for Fleet and History ---
+if "fleet" not in st.session_state:
+    st.session_state.fleet = pd.DataFrame([
+        {"vehicle_id": "EV-001", "model": "Model S Long Range", "battery_kwh": 100.0, "status": "Active"},
+        {"vehicle_id": "EV-002", "model": "Model 3 Standard", "battery_kwh": 60.0, "status": "Active"},
+        {"vehicle_id": "EV-003", "model": "SUV Performance", "battery_kwh": 90.0, "status": "Charging"}
+    ])
 
-FEATURES = ["battery_capacity_kwh", "charge_percent", "extra_load_kg", "speed_kmph", "ac_on"]
-TARGET = "range_km"
+if "history" not in st.session_state:
+    st.session_state.history = pd.DataFrame(columns=[
+        "timestamp", "vehicle_id", "battery_kwh", "charge_percent", "extra_load_kg", "speed_kmph", "ac_on", "predicted_range_km"
+    ])
 
-@st.cache_data
-def make_demo_data():
-    rng = np.random.default_rng(42)
-    n = 500
-    battery = rng.uniform(30, 100, n)
-    charge = rng.uniform(20, 100, n)
-    load = rng.uniform(0, 500, n)
-    speed = rng.uniform(20, 100, n)
-    ac = rng.integers(0, 2, n)
-    range_km = battery * 2 * charge / 100 - load * 0.025 - speed * 0.15 - ac * 5 + rng.normal(0, 3, n)
-    return pd.DataFrame({
-        "battery_capacity_kwh": battery,
+# --- Train a Demo ML Model ---
+@st.cache_resource
+def train_model():
+    np.random.seed(42)
+    n_samples = 500
+    cap = np.random.uniform(50, 110, n_samples)
+    charge = np.random.uniform(15, 100, n_samples)
+    load = np.random.uniform(0, 300, n_samples)
+    speed = np.random.uniform(40, 120, n_samples)
+    ac = np.random.choice([0, 1], n_samples)
+    
+    # Range formula baseline + noise
+    range_km = (cap * (charge / 100) * 4.5) - (load * 0.08) - ((speed - 60).clip(0) * 0.5) - (ac * 15) + np.random.normal(0, 5, n_samples)
+    range_km = np.clip(range_km, 10, 700)
+    
+    X = pd.DataFrame({
+        "battery_capacity_kwh": cap,
         "charge_percent": charge,
         "extra_load_kg": load,
         "speed_kmph": speed,
-        "ac_on": ac,
-        "range_km": np.maximum(range_km, 0)
+        "ac_on": ac
     })
+    y = range_km
+    
+    model = RandomForestRegressor(n_estimators=50, random_state=42)
+    model.fit(X, y)
+    return model
 
-if "prediction_history" not in st.session_state:
-    st.session_state["prediction_history"] = []
-if "last_prediction" not in st.session_state:
-    st.session_state["last_prediction"] = None
+model = train_model()
 
-# Header
-h1, h2 = st.columns([3, 1])
-with h1:
-    st.title("🔋 EV INTELLIGENCE PRO")
-    st.caption("ELECTRIC VEHICLE RANGE • ENERGY ANALYTICS • MACHINE LEARNING")
-with h2:
-    st.markdown("**SYSTEM TIME**")
-    st.write(datetime.now().strftime("%d %b %Y · %I:%M %p"))
-    st.success("Prediction engine ready")
+# --- Top Bar Header ---
+st.title("⚡ EV Intelligence Pro — Fleet Dashboard")
+st.markdown("Company-level multi-vehicle EV monitoring, AI range prediction, and session analytics.")
+st.markdown("---")
 
-st.divider()
+# --- Sidebar: Fleet Management & Controls ---
+st.sidebar.header("🚗 Fleet Management")
 
-# Dataset upload
-u1, u2 = st.columns([2, 1])
-with u1:
-    st.subheader("Fleet intelligence dashboard")
-    st.write("One-screen EV range prediction and dataset analytics.")
-with u2:
-    uploaded_file = st.file_uploader("Upload EV CSV dataset", type=["csv"])
+# Add new vehicle form
+with st.sidebar.expander("Register New Vehicle"):
+    new_id = st.text_input("Vehicle ID", value=f"EV-00{len(st.session_state.fleet)+1}")
+    new_model = st.text_input("Vehicle Model", value="Model Y Performance")
+    new_cap = st.number_input("Battery Capacity (kWh)", value=75.0, min_value=20.0, max_value=200.0)
+    new_status = st.selectbox("Initial Status", ["Active", "Charging", "Maintenance"])
+    
+    if st.button("Add Vehicle"):
+        if new_id in st.session_state.fleet["vehicle_id"].values:
+            st.sidebar.error("Vehicle ID already exists!")
+        else:
+            new_row = pd.DataFrame([{"vehicle_id": new_id, "model": new_model, "battery_kwh": new_cap, "status": new_status}])
+            st.session_state.fleet = pd.concat([st.session_state.fleet, new_row], ignore_index=True)
+            st.sidebar.success(f"Added {new_id} successfully!")
 
-if uploaded_file is not None:
-    try:
-        raw_df = pd.read_csv(uploaded_file)
-        source_label = "Uploaded dataset"
-    except Exception as exc:
-        st.error(f"Could not read CSV: {exc}")
-        st.stop()
-else:
-    raw_df = make_demo_data()
-    source_label = "Synthetic demo dataset"
+selected_vehicle = st.sidebar.selectbox("Select Active Vehicle for Prediction", st.session_state.fleet["vehicle_id"].values)
 
-missing = [col for col in FEATURES + [TARGET] if col not in raw_df.columns]
-if missing:
-    st.error("CSV is missing required columns: " + ", ".join(missing))
-    st.info("Required CSV columns:")
-    st.code(", ".join(FEATURES + [TARGET]))
-    st.stop()
+# Get details of selected vehicle
+selected_row = st.session_state.fleet[st.session_state.fleet["vehicle_id"] == selected_vehicle].iloc[0]
 
-df = raw_df.copy()
-for col in FEATURES + [TARGET]:
-    df[col] = pd.to_numeric(df[col], errors="coerce")
-df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=FEATURES + [TARGET])
+st.sidebar.markdown("---")
+st.sidebar.info(f"**Selected Info:**\n- Model: {selected_row['model']}\n- Capacity: {selected_row['battery_kwh']} kWh\n- Status: {selected_row['status']}")
 
-if len(df) < 10:
-    st.error("Please provide at least 10 valid rows in the CSV.")
-    st.stop()
-if df[TARGET].nunique() < 2:
-    st.error("The range_km column must contain at least two different values.")
-    st.stop()
+# --- KPI Cards ---
+col1, col2, col3, col4 = st.columns(4)
+total_vehicles = len(st.session_state.fleet)
 
-# Train model
-X = df[FEATURES]
-y = df[TARGET]
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-model = RandomForestRegressor(n_estimators=120, random_state=42, n_jobs=-1)
-model.fit(X_train, y_train)
-test_pred = model.predict(X_test)
-mae = mean_absolute_error(y_test, test_pred)
-r2 = r2_score(y_test, test_pred) if len(y_test) > 1 else 0.0
+avg_range = st.session_state.history["predicted_range_km"].mean() if not st.session_state.history.empty else 350.0
+active_count = len(st.session_state.fleet[st.session_state.fleet["status"] == "Active"])
 
-# KPI cards
-k1, k2, k3, k4 = st.columns(4)
-k1.metric("Dataset records", f"{len(df):,}")
-k2.metric("Average recorded range", f"{df[TARGET].mean():.1f} km")
-k3.metric("Model MAE", f"{mae:.2f} km")
-k4.metric("Model R²", f"{r2:.3f}")
-st.caption(f"DATA SOURCE: {source_label} • Synthetic data is for demonstration only.")
-st.divider()
+with col1:
+    st.metric("Total Fleet Vehicles", total_vehicles)
+with col2:
+    st.metric("Active Status", f"{active_count} / {total_vehicles}")
+with col3:
+    st.metric("Avg Predicted Range", f"{avg_range:.1f} km" if not np.isnan(avg_range) else "N/A")
+with col4:
+    st.metric("System Status", "Operational", "Online")
 
-# Main content
-left, right = st.columns([1, 1.35], gap="large")
+st.markdown("---")
 
-with left:
-    st.subheader("⚡ Range prediction")
-    with st.container(border=True):
-        vehicle_id = st.text_input("Vehicle ID", value="EV-001")
-        c1, c2 = st.columns(2)
-        with c1:
-            battery = st.number_input("Battery capacity (kWh)", min_value=1.0, max_value=300.0, value=60.0, step=1.0)
-            charge = st.slider("Battery charge (%)", 0, 100, 80)
-            load = st.number_input("Additional load (kg)", min_value=0.0, max_value=5000.0, value=100.0, step=10.0)
-        with c2:
-            speed = st.number_input("Average speed (km/h)", min_value=1.0, max_value=200.0, value=60.0, step=1.0)
-            ac = st.selectbox("Air conditioning", ["Off", "On"])
-        predict_clicked = st.button("⚡ Predict range", type="primary", use_container_width=True)
+# --- Main Dashboard Grid ---
+left_col, right_col = st.columns([1, 1])
 
-    if predict_clicked:
-        input_data = pd.DataFrame([{
-            "battery_capacity_kwh": battery,
-            "charge_percent": charge,
-            "extra_load_kg": load,
+with left_col:
+    st.subheader(f"⚡ Range Prediction Panel ({selected_vehicle})")
+    
+    with st.form("prediction_form"):
+        battery_cap = st.number_input("Battery Capacity (kWh)", value=float(selected_row['battery_kwh']), min_value=10.0, max_value=200.0)
+        charge_pct = st.slider("Battery Charge (%)", min_value=5.0, max_value=100.0, value=80.0)
+        extra_load = st.slider("Additional Load (kg)", min_value=0.0, max_value=500.0, value=50.0)
+        speed = st.slider("Average Speed (km/h)", min_value=10.0, max_value=140.0, value=75.0)
+        ac_status = st.selectbox("AC / Climate Control", ["Off", "On"])
+        
+        submit_btn = st.form_submit_button("⚡ Predict EV Range & Save", type="primary")
+        
+    if submit_btn:
+        ac_val = 1 if ac_status == "On" else 0
+        input_data = pd.DataFrame({
+            "battery_capacity_kwh": [battery_cap],
+            "charge_percent": [charge_pct],
+            "extra_load_kg": [extra_load],
+            "speed_kmph": [speed],
+            "ac_on": [ac_val]
+        })
+        
+        prediction = model.predict(input_data)[0]
+        
+        st.success(f"**Estimated Range for {selected_vehicle}: {prediction:.1f} km**")
+        
+        if charge_pct < 20:
+            st.warning("⚠️ Low battery warning! Consider scheduling a recharge soon.")
+            
+        # Save to session history
+        new_history_row = pd.DataFrame([{
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "vehicle_id": selected_vehicle,
+            "battery_kwh": battery_cap,
+            "charge_percent": charge_pct,
+            "extra_load_kg": extra_load,
             "speed_kmph": speed,
-            "ac_on": 1 if ac == "On" else 0
+            "ac_on": ac_status,
+            "predicted_range_km": round(prediction, 2)
         }])
-        prediction = max(0.0, float(model.predict(input_data)[0]))
-        record = {
-            "Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "Vehicle ID": vehicle_id.strip() or "EV-001",
-            "Battery (kWh)": battery,
-            "Charge (%)": charge,
-            "Load (kg)": load,
-            "Speed (km/h)": speed,
-            "AC": ac,
-            "Predicted Range (km)": round(prediction, 2)
-        }
-        st.session_state["last_prediction"] = record
-        st.session_state["prediction_history"].insert(0, record)
+        st.session_state.history = pd.concat([new_history_row, st.session_state.history], ignore_index=True)
 
-    last = st.session_state["last_prediction"]
-    if last:
-        st.markdown("#### Latest prediction")
-        st.metric(f"Estimated range · {last['Vehicle ID']}", f"{last['Predicted Range (km)']:.2f} km")
-        st.progress(int(last["Charge (%)"]))
-        st.caption(f"Battery charge input: {last['Charge (%)']}%")
-
-with right:
-    st.subheader("📊 Energy analytics")
-    tab1, tab2 = st.tabs(["Load vs range", "Speed vs range"])
-    with tab1:
-        fig = px.scatter(df, x="extra_load_kg", y="range_km", color="charge_percent",
-                         labels={"extra_load_kg": "Additional load (kg)", "range_km": "Recorded range (km)", "charge_percent": "Charge (%)"},
-                         template="plotly_dark", opacity=0.8)
-        fig.update_layout(height=340, margin=dict(l=10, r=10, t=20, b=10))
+with right_col:
+    st.subheader("📊 Fleet Overview & Analytics")
+    
+    if not st.session_state.history.empty:
+        fig = px.scatter(
+            st.session_state.history, 
+            x="speed_kmph", 
+            y="predicted_range_km", 
+            color="vehicle_id",
+            size="extra_load_kg",
+            hover_data=["charge_percent", "ac_on"],
+            title="Speed vs Range Impact across Fleet"
+        )
         st.plotly_chart(fig, use_container_width=True)
-    with tab2:
-        fig = px.scatter(df, x="speed_kmph", y="range_km", color="extra_load_kg",
-                         labels={"speed_kmph": "Speed (km/h)", "range_km": "Recorded range (km)", "extra_load_kg": "Load (kg)"},
-                         template="plotly_dark", opacity=0.8)
-        fig.update_layout(height=340, margin=dict(l=10, r=10, t=20, b=10))
-        st.plotly_chart(fig, use_container_width=True)
-
-    imp = pd.DataFrame({"Feature": FEATURES, "Importance": model.feature_importances_}).sort_values("Importance")
-    fig_imp = px.bar(imp, x="Importance", y="Feature", orientation="h",
-                     title="Model feature importance", template="plotly_dark")
-    fig_imp.update_layout(height=280, margin=dict(l=10, r=10, t=45, b=10))
-    st.plotly_chart(fig_imp, use_container_width=True)
-
-# History and dataset are also on the same page
-st.divider()
-b1, b2 = st.columns([1.2, 1], gap="large")
-with b1:
-    st.subheader("🕘 Recent prediction history")
-    history = st.session_state["prediction_history"]
-    if history:
-        history_df = pd.DataFrame(history)
-        st.dataframe(history_df.head(10), use_container_width=True, hide_index=True)
-        st.download_button("Download history CSV", history_df.to_csv(index=False).encode("utf-8"),
-                           file_name="ev_prediction_history.csv", mime="text/csv")
     else:
-        st.info("Predictions will appear here after you click Predict range.")
-with b2:
-    st.subheader("🗂️ Dataset preview")
-    st.dataframe(df.head(8), use_container_width=True, hide_index=True)
-    st.download_button("Download active dataset CSV", df.to_csv(index=False).encode("utf-8"),
-                       file_name="ev_active_dataset.csv", mime="text/csv")
+        st.info("Make a few predictions using the panel on the left to see live analytics charts here!")
+        
+        dummy_df = pd.DataFrame({
+            "Speed": [40, 60, 80, 100, 120],
+            "Estimated Range": [450, 420, 380, 320, 260]
+        })
+        fig = px.line(dummy_df, x="Speed", y="Estimated Range", markers=True, title="Sample Baseline Range Curve")
+        st.plotly_chart(fig, use_container_width=True)
 
-st.divider()
-st.caption("EV Intelligence Pro • Single-page dashboard • Educational prototype. Validate predictions with real EV measurements before real-world use.")
+st.markdown("---")
 
+# --- Fleet Register & History Tables ---
+tab1, tab2 = st.tabs(["🚗 Registered Fleet", "📈 Prediction History"])
+
+with tab1:
+    st.subheader("Current Fleet Inventory")
+    st.dataframe(st.session_state.fleet, use_container_width=True)
+    
+    fleet_csv = st.session_state.fleet.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "Download Fleet Inventory CSV",
+        fleet_csv,
+        file_name="ev_fleet_inventory.csv",
+        mime="text/csv"
+    )
+
+with tab2:
+    st.subheader("Session Prediction History Log")
+    if not st.session_state.history.empty:
+        st.dataframe(st.session_state.history, use_container_width=True)
+        
+        history_csv = st.session_state.history.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "Download History CSV",
+            history_csv,
+            file_name="ev_prediction_history.csv",
+            mime="text/csv"
+        )
+    else:
+        st.info("No predictions recorded in this session yet.")

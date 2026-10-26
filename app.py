@@ -212,7 +212,6 @@ with tab3:
     with col_res2:
         uploaded_research_file = st.file_uploader("Or Upload Custom Research CSV", type=["csv"])
 
-    # Load data source
     research_df = None
     if uploaded_research_file is not None:
         try:
@@ -221,7 +220,6 @@ with tab3:
         except Exception as e:
             st.error(f"Error reading file: {e}")
     elif use_sample_data:
-        # Generate a consistent mock research test benchmark set
         np.random.seed(101)
         n_test = 100
         research_df = pd.DataFrame({
@@ -231,7 +229,7 @@ with tab3:
             "extra_load_kg": np.random.uniform(0, 250, n_test),
             "speed_kmph": np.random.uniform(45, 130, n_test),
             "ac_on": np.random.choice([0, 1], n_test),
-            "actual_range_km": np.random.uniform(120, 480, n_test) # Ground truth for research validation
+            "actual_range_km": np.random.uniform(120, 480, n_test)
         })
 
     if research_df is not None:
@@ -246,18 +244,15 @@ with tab3:
         else:
             if st.button("🚀 Run Batch Research Prediction", type="primary"):
                 features_for_pred = research_df[required_cols].copy()
-                # Ensure correct types
                 for col in required_cols:
                     features_for_pred[col] = pd.to_numeric(features_for_pred[col])
                 
-                # Predict
                 predictions = model.predict(features_for_pred)
                 research_df["predicted_range_km"] = np.round(predictions, 2)
                 
                 st.success("Batch prediction completed successfully across all research records!")
                 st.dataframe(research_df, use_container_width=True)
                 
-                # If ground truth column 'actual_range_km' exists, compute metrics
                 if "actual_range_km" in research_df.columns:
                     st.markdown("### 📊 Research Model Evaluation Metrics")
                     y_true = pd.to_numeric(research_df["actual_range_km"])
@@ -272,18 +267,15 @@ with tab3:
                     with m2:
                         st.metric("R² Score (Accuracy Fit)", f"{r2:.4f}")
                         
-                    # Scatter plot comparison (Actual vs Predicted)
                     fig_eval = px.scatter(
                         research_df,
                         x="actual_range_km",
                         y="predicted_range_km",
-                        trendline="ols",
                         labels={"actual_range_km": "Actual Range (km)", "predicted_range_km": "Predicted Range (km)"},
                         title="Model Validation: Actual vs. Predicted Range (Research Benchmark)"
                     )
                     st.plotly_chart(fig_eval, use_container_width=True)
                 
-                # Export results
                 research_csv = research_df.to_csv(index=False).encode("utf-8")
                 st.download_button(
                     "📥 Download Batch Prediction Results CSV",

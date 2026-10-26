@@ -94,3 +94,67 @@ def numeric_series(frame, column):
 
 def estimate_range(capacity_kwh, charge_pct, usable_pct, baseline_wh_km, payload_kg, speed_kmh, ac_on, road):
     # Simple illustrative calculation only. Not validated vehicle physics.
+    load_factor = 1 + max(0, payload_kg) * 0.0002
+    speed_factor = 1 + max(0, speed_kmh - 60) * 0.001
+    ac_factor = 1.08 if ac_on else 1.0
+    road_factor = 1.04 if road == "Highway" else (1.03 if road == "City" and speed_kmh < 35 else 1.0)
+    usable_energy = capacity_kwh * charge_pct / 100 * usable_pct / 100
+    adjusted_consumption = baseline_wh_km * load_factor * speed_factor * ac_factor * road_factor
+    estimated_range = usable_energy * 1000 / adjusted_consumption if adjusted_consumption > 0 else 0
+    return usable_energy, adjusted_consumption, estimated_range
+
+# Initialize session state before navigation.
+if "prediction_history" not in st.session_state:
+    st.session_state.prediction_history = []
+if "trained_model" not in st.session_state:
+    st.session_state.trained_model = None
+if "model_features" not in st.session_state:
+    st.session_state.model_features = []
+if "model_target" not in st.session_state:
+    st.session_state.model_target = None
+if "model_metrics" not in st.session_state:
+    st.session_state.model_metrics = None
+if "model_test_results" not in st.session_state:
+    st.session_state.model_test_results = None
+
+# Sidebar and data loading.
+with st.sidebar:
+    st.markdown("# ⚡ EV INTELLIGENCE")
+    st.caption("PRO · RANGE & ENERGY ANALYTICS")
+    st.markdown('<span class="pill">● ANALYTICS WORKSPACE</span>', unsafe_allow_html=True)
+    page = st.radio(
+        "NAVIGATION",
+        ["Executive Overview", "EV Cockpit", "Range Simulator", "Advanced Analytics", "Dataset Lab", "AI Model Studio", "Prediction History"],
+    )
+    st.markdown("---")
+    uploaded_file = st.file_uploader("Upload EV CSV dataset", type=["csv"], help="CSV data is processed for this session.")
+    st.caption("Without an upload, the app uses synthetic demo data—not live vehicle telemetry.")
+    st.markdown("---")
+    st.caption("EV Intelligence Pro · Stable Edition")
+
+data_source = "Synthetic demo dataset"
+df = None
+if uploaded_file is not None:
+    try:
+        uploaded_file.seek(0)
+        df = pd.read_csv(uploaded_file)
+        if df.empty or len(df.columns) == 0:
+            st.warning("The uploaded CSV is empty. Using demo data instead.")
+            df = None
+        else:
+            data_source = f"Uploaded dataset · {uploaded_file.name}"
+    except Exception as exc:
+        st.error(f"Could not read the uploaded CSV: {exc}")
+        st.info("Check that the file is a valid comma-separated CSV, then upload it again.")
+if df is None:
+    df = demo_dataset()
+
+# Avoid failures caused by duplicate or blank column names.
+df.columns = [str(c).strip() if str(c).strip() else f"Column_{i+1}" for i, c in enumerate(df.columns)]
+if df.columns.duplicated().any():
+    df.columns = [f"{c}_{i+1}" if list(df.columns).count(c) > 1 else c for i, c in enumerate(df.columns)]
+
+charge = numeric_series(df, "Battery_Charge_pct")
+load = numeric_series(df, "Extra_Load_kg")
+range_values = numeric_series(df, "Range_km")
+consumption = numeric_series(df, "Consumption_Wh_km")

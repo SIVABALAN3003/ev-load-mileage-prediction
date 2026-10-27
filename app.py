@@ -328,10 +328,10 @@ elif nav_selection == "🎓 Capstone Details":
     ---
     
     ### Project Team & Mentorship
-    - **Team Lead:** Team Lead Name
-    - **Team Members:** Member 1, Member 2, Member 3, Member 4
-    - **Project Mentor:** Mentor Name
-    - **Institution:** College Name
+    - **Team Lead:** Sivabalan A
+    - **Team Members:** Ajay kumar K,Srigaran R
+    - **Project Mentor:** Santhosh P
+    - **Institution:** University College Of Engineering
     
     ---
     
